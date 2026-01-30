@@ -1,10 +1,78 @@
+// import { AdminModule } from '@/admin/admin.module';
+// import { HealthController } from '@/common/controllers/health.controller';
+import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
+import { JwtStrategy } from '@/common/strategies/jwt.strategy';
+import { Env, envSchema } from '@/config/configuration';
+import { EmailModule } from '@/email/email.module';
+import { PasswordAuthModule } from '@/password-auth/password-auth.module';
+import { PasswordlessAuthModule } from '@/passwordless-auth/passwordless-auth.module';
+import { SecurityModule } from '@/security/security.module';
+// import { WebAuthnModule } from '@/webauthn-auth/webauthn-auth.module';
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import z from 'zod';
 
 @Module({
-  imports: [],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: (config) => {
+        const parsed = envSchema.safeParse(config);
+        if (!parsed.success) {
+          console.error(
+            '❌ Invalid environment variables:',
+            z.treeifyError(parsed.error),
+          );
+          throw new Error('Config validation failed');
+        }
+        return parsed.data;
+      },
+    }),
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService<Env, true>) => ({
+        throttlers: [
+          {
+            ttl: configService.get('THROTTLE_TTL', { infer: true }),
+            limit: configService.get('THROTTLE_LIMIT', { infer: true }),
+          },
+        ],
+      }),
+    }),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService<Env, true>) => ({
+        secret: configService.get('JWT_SECRET', { infer: true }),
+        signOptions: {
+          expiresIn: configService.get('JWT_EXPIRES_IN', { infer: true }),
+        },
+      }),
+    }),
+    PassportModule,
+    PasswordAuthModule,
+    PasswordlessAuthModule,
+    // WebAuthnModule,
+    SecurityModule,
+    EmailModule,
+    // AdminModule,
+  ],
+  // controllers: [HealthController],
+  providers: [
+    JwtStrategy,
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

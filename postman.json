@@ -1,0 +1,498 @@
+{
+  "info": {
+    "name": "Auth Backend API",
+    "description": "Multi-authentication backend system with password, passwordless, and WebAuthn support",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Password Authentication",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('authToken', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"TestPassword123!\",\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "register"]
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('authToken', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"TestPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get MFA QR Code",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/mfa/qrcode",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "mfa", "qrcode"]
+            }
+          }
+        },
+        {
+          "name": "Enable MFA",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"totpCode\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/mfa/enable",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "mfa", "enable"]
+            }
+          }
+        },
+        {
+          "name": "Disable MFA",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"totpCode\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/mfa/disable",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "mfa", "disable"]
+            }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"TestPassword123!\",\n  \"newPassword\": \"NewPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "change-password"]
+            }
+          }
+        },
+        {
+          "name": "Request Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/reset-password/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "reset-password", "request"]
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"reset_token_from_email\",\n  \"newPassword\": \"NewPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password/reset-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password", "reset-password"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Passwordless Authentication",
+      "item": [
+        {
+          "name": "Send Magic Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"passwordless@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/passwordless/send-magic-link",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "passwordless", "send-magic-link"]
+            }
+          }
+        },
+        {
+          "name": "Verify Magic Link",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('authToken', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"magic_link_token\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/passwordless/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "passwordless", "verify"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "WebAuthn Authentication",
+      "item": [
+        {
+          "name": "Get Registration Options",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/registration/options",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "registration", "options"]
+            }
+          }
+        },
+        {
+          "name": "Verify Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential\": {},\n  \"deviceName\": \"My Security Key\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/registration/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "registration", "verify"]
+            }
+          }
+        },
+        {
+          "name": "Get Authentication Options",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/authentication/options",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "authentication", "options"]
+            }
+          }
+        },
+        {
+          "name": "Verify Authentication",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('authToken', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential\": {}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/authentication/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "authentication", "verify"]
+            }
+          }
+        },
+        {
+          "name": "Get User Credentials",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/credentials",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "credentials"]
+            }
+          }
+        },
+        {
+          "name": "Delete Credential",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/webauthn/credentials/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "webauthn", "credentials", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "credential-id"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Get Security Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/security-events?limit=100",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "security-events"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Metrics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "metrics"]
+            }
+          }
+        },
+        {
+          "name": "Get Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "users"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

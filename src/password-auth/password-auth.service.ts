@@ -1,3 +1,4 @@
+import { AuthService } from '@/auth/auth.service';
 import { Env } from '@/config/configuration';
 import { db } from '@/db';
 import { passwordAuth, passwordResetTokens, users } from '@/db/schema';
@@ -20,7 +21,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -33,9 +33,9 @@ export class PasswordAuthService {
 
   constructor(
     private readonly configService: ConfigService<Env, true>,
-    private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
     private readonly emailService: EmailService,
+    private readonly authService: AuthService,
   ) {
     this.bcryptSaltRounds = this.configService.get('BCRYPT_SALT_ROUNDS', {
       infer: true,
@@ -68,24 +68,31 @@ export class PasswordAuthService {
     // Hash password
     const passwordHash = await bcrypt.hash(password, this.bcryptSaltRounds);
 
-    // Create user
-    const [newUser] = await db
-      .insert(users)
-      .values({
-        email: email.toLowerCase(),
-        firstName,
-        lastName,
-        emailVerified: false,
-      })
-      .returning();
+    // Create user and password auth record in a transaction
+    const { newUser } = await db.transaction(async (tx) => {
+      const [user] = await tx
+        .insert(users)
+        .values({
+          email: email.toLowerCase(),
+          firstName,
+          lastName,
+          emailVerified: false,
+        })
+        .returning();
 
-    // Create password auth record
-    await db.insert(passwordAuth).values({
-      userId: newUser.id,
-      passwordHash,
-      passwordChangedAt: new Date(),
+      await tx.insert(passwordAuth).values({
+        userId: user.id,
+        passwordHash,
+        passwordChangedAt: new Date(),
+      });
+
+      return { newUser: user };
     });
-
+    const tokens = await this.authService.generateTokens(
+      newUser.id,
+      ipAddress,
+      userAgent,
+    );
     // Log security event
     await this.securityService.logSecurityEvent({
       userId: newUser.id,
@@ -96,12 +103,9 @@ export class PasswordAuthService {
       success: true,
     });
 
-    // Generate JWT token
-    const token = this.generateToken(newUser.id);
-
     return {
-      user: this.sanitizeUser(newUser),
-      token,
+      user: this.authService.sanitizeUser(newUser),
+      ...tokens,
     };
   }
 
@@ -194,12 +198,16 @@ export class PasswordAuthService {
       success: true,
     });
 
-    // Generate JWT token
-    const token = this.generateToken(user.id);
+    // Generate tokens
+    const tokens = await this.authService.generateTokens(
+      user.id,
+      ipAddress,
+      userAgent,
+    );
 
     return {
-      user: this.sanitizeUser(user),
-      token,
+      user: this.authService.sanitizeUser(user),
+      ...tokens,
     };
   }
 
@@ -580,19 +588,6 @@ export class PasswordAuthService {
       success: false,
       errorMessage: 'Invalid credentials',
     });
-  }
-
-  private generateToken(userId: string): string {
-    const payload = { sub: userId };
-    return this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_SECRET', { infer: true }),
-      expiresIn: this.configService.get('JWT_EXPIRES_IN', { infer: true }),
-    });
-  }
-
-  private sanitizeUser(user: any) {
-    const { passwordAuth, ...sanitized } = user;
-    return sanitized;
   }
 
   private isCommonPassword(password: string): boolean {

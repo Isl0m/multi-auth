@@ -1,6 +1,12 @@
+import { AuthService } from '@/auth/auth.service';
 import { Env } from '@/config/configuration';
 import { db } from '@/db';
-import { users, webauthnCredentials } from '@/db/schema';
+import {
+  users,
+  webauthnCredentials,
+  webauthnRegistrationTokens,
+} from '@/db/schema';
+import { EmailService } from '@/email/email.service';
 import { SecurityService } from '@/security/security.service';
 import {
   BadRequestException,
@@ -8,7 +14,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import type {
   AuthenticationResponseJSON,
   RegistrationResponseJSON,
@@ -20,52 +25,92 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import { isoUint8Array } from '@simplewebauthn/server/helpers';
-import { and, eq } from 'drizzle-orm';
+import * as crypto from 'crypto';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 @Injectable()
-export class WebAuthnService {
+export class WebAuthnAuthService {
   private readonly rpName: string;
   private readonly rpId: string;
   private readonly origin: string;
 
   constructor(
     private readonly configService: ConfigService<Env, true>,
-    private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
+    private readonly authService: AuthService,
+    private readonly emailService: EmailService,
   ) {
     this.rpName = this.configService.get('WEBAUTHN_RP_NAME', { infer: true });
     this.rpId = this.configService.get('WEBAUTHN_RP_ID', { infer: true });
     this.origin = this.configService.get('WEBAUTHN_ORIGIN', { infer: true });
   }
 
-  async generateRegistrationOptions(userId: string) {
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, userId),
-      with: {
-        webauthnCredentials: true,
-      },
+  async sendRegistrationEmail(
+    email: string,
+    ipAddress: string,
+    userAgent: string,
+  ) {
+    const normalizedEmail = email.toLowerCase();
+
+    // Check if user already exists
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, normalizedEmail),
     });
 
-    if (!user) {
-      throw new UnauthorizedException('User not found');
+    if (existingUser) {
+      throw new BadRequestException(
+        'User already exists. Please login instead.',
+      );
     }
 
-    const excludeCredentials = user.webauthnCredentials.map((cred) => ({
-      id: cred.credentialId,
-      type: 'public-key' as const,
-      transports: cred.transports as AuthenticatorTransport[] | undefined,
-    }));
+    // Generate registration token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    // Save token
+    await db.insert(webauthnRegistrationTokens).values({
+      email: normalizedEmail,
+      token,
+      expiresAt,
+      ipAddress,
+      userAgent,
+    });
+
+    // Send registration email
+    const registrationUrl = `${this.configService.get('FRONTEND_URL', { infer: true })}/auth/webauthn/register?token=${token}`;
+    await this.emailService.sendWebAuthnRegistrationEmail(
+      normalizedEmail,
+      registrationUrl,
+    );
+
+    return {
+      message: 'Verification email sent. Please check your inbox.',
+    };
+  }
+
+  async generateRegistrationOptions(token: string) {
+    // Find valid token
+    const regToken = await db.query.webauthnRegistrationTokens.findFirst({
+      where: and(
+        eq(webauthnRegistrationTokens.token, token),
+        isNull(webauthnRegistrationTokens.usedAt),
+        gt(webauthnRegistrationTokens.expiresAt, new Date()),
+      ),
+    });
+
+    if (!regToken) {
+      throw new BadRequestException('Invalid or expired registration token');
+    }
 
     const options = await generateRegistrationOptions({
       rpName: this.rpName,
       rpID: this.rpId,
-      userID: isoUint8Array.fromUTF8String(user.id),
-      userName: user.email,
-      userDisplayName:
-        `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
+      userID: isoUint8Array.fromUTF8String(regToken.email),
+      userName: regToken.email,
+      userDisplayName: regToken.email,
       timeout: 60000,
       attestationType: 'none',
-      excludeCredentials,
+      excludeCredentials: [],
       authenticatorSelection: {
         residentKey: 'preferred',
         userVerification: 'preferred',
@@ -76,71 +121,92 @@ export class WebAuthnService {
   }
 
   async verifyRegistration(
-    userId: string,
+    token: string,
     credential: RegistrationResponseJSON,
     expectedChallenge: string,
     deviceName?: string,
     ipAddress?: string,
     userAgent?: string,
   ) {
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, userId),
+    // Find valid token
+    const regToken = await db.query.webauthnRegistrationTokens.findFirst({
+      where: and(
+        eq(webauthnRegistrationTokens.token, token),
+        isNull(webauthnRegistrationTokens.usedAt),
+        gt(webauthnRegistrationTokens.expiresAt, new Date()),
+      ),
     });
 
-    if (!user) {
-      throw new UnauthorizedException('User not found');
+    if (!regToken) {
+      throw new BadRequestException('Invalid or expired registration token');
     }
 
     try {
       const verification = await verifyRegistrationResponse({
         response: credential,
-        // expectedChallenge: credential.response.clientDataJSON,
         expectedChallenge,
         expectedOrigin: this.origin,
         expectedRPID: this.rpId,
+        requireUserVerification: false,
       });
-
       if (!verification.verified || !verification.registrationInfo) {
         throw new BadRequestException('Verification failed');
       }
+      const result = await db.transaction(async (tx) => {
+        // 1. Create the user
+        const [newUser] = await tx
+          .insert(users)
+          .values({
+            email: regToken.email,
+            emailVerified: true,
+          })
+          .returning();
 
-      // Save credential
-      await db.insert(webauthnCredentials).values({
-        userId: user.id,
-        credentialId: verification.registrationInfo.credential.id,
-        credentialPublicKey: isoUint8Array.toUTF8String(
-          verification.registrationInfo.credential.publicKey,
-        ),
-        counter: verification.registrationInfo.credential.counter,
-        deviceName: deviceName || 'Unknown Device',
-        lastUsedAt: new Date(),
+        // 2. Save credential
+        await tx.insert(webauthnCredentials).values({
+          userId: newUser.id,
+          credentialId: verification.registrationInfo!.credential.id,
+          credentialPublicKey: Buffer.from(
+            verification.registrationInfo!.credential.publicKey,
+          ).toString('base64'),
+          counter: verification.registrationInfo!.credential.counter,
+          deviceName: deviceName || 'Unknown Device',
+          lastUsedAt: new Date(),
+        });
+
+        // 3. Mark token as used
+        await tx
+          .update(webauthnRegistrationTokens)
+          .set({ usedAt: new Date() })
+          .where(eq(webauthnRegistrationTokens.id, regToken.id));
+
+        return newUser;
       });
 
-      // Log event
+      // 4. Log event
       await this.securityService.logSecurityEvent({
-        userId: user.id,
+        userId: result.id,
         eventType: 'webauthn_registered',
         authMethod: 'webauthn',
-        ipAddress,
-        userAgent,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
         success: true,
       });
 
-      return {
-        verified: true,
-        message: 'WebAuthn credential registered successfully',
-      };
-    } catch (error) {
-      await this.securityService.logSecurityEvent({
-        userId: user.id,
-        eventType: 'webauthn_registered',
-        authMethod: 'webauthn',
+      const tokens = await this.authService.generateTokens(
+        result.id,
         ipAddress,
         userAgent,
-        success: false,
-        errorMessage: error.message,
-      });
-      throw new BadRequestException('Failed to verify registration');
+      );
+
+      return {
+        verified: true,
+        ...tokens,
+        user: this.authService.sanitizeUser(result),
+      };
+    } catch (error) {
+      console.error('WebAuthn Registration Error:', error);
+      throw new BadRequestException(error.message);
     }
   }
 
@@ -159,7 +225,7 @@ export class WebAuthnService {
     const allowCredentials = user.webauthnCredentials.map((cred) => ({
       id: cred.credentialId,
       type: 'public-key' as const,
-      transports: cred.transports as AuthenticatorTransport[] | undefined,
+      transports: (cred.transports as AuthenticatorTransport[]) || undefined,
     }));
 
     const options = await generateAuthenticationOptions({
@@ -175,6 +241,7 @@ export class WebAuthnService {
   async verifyAuthentication(
     userId: string,
     credential: AuthenticationResponseJSON,
+    expectedChallenge: string,
     ipAddress: string,
     userAgent: string,
   ) {
@@ -189,11 +256,8 @@ export class WebAuthnService {
       throw new UnauthorizedException('User not found');
     }
 
-    const credentialId = Buffer.from(credential.id, 'base64url').toString(
-      'base64',
-    );
     const dbCredential = user.webauthnCredentials.find(
-      (cred) => cred.credentialId === credentialId,
+      (cred) => cred.credentialId === credential.id,
     );
 
     if (!dbCredential) {
@@ -212,16 +276,15 @@ export class WebAuthnService {
     try {
       const verification = await verifyAuthenticationResponse({
         response: credential,
-        expectedChallenge: credential.response.clientDataJSON,
+        expectedChallenge,
         expectedOrigin: this.origin,
         expectedRPID: this.rpId,
         credential: {
           id: dbCredential.credentialId,
-          publicKey: isoUint8Array.fromUTF8String(
-            dbCredential.credentialPublicKey,
-          ),
+          publicKey: Buffer.from(dbCredential.credentialPublicKey, 'base64'),
           counter: dbCredential.counter,
         },
+        requireUserVerification: false,
       });
 
       if (!verification.verified) {
@@ -256,22 +319,16 @@ export class WebAuthnService {
         success: true,
       });
 
-      await this.securityService.logSecurityEvent({
-        userId: user.id,
-        eventType: 'webauthn_authenticated',
-        authMethod: 'webauthn',
+      const tokens = await this.authService.generateTokens(
+        user.id,
         ipAddress,
         userAgent,
-        success: true,
-      });
-
-      // Generate JWT token
-      const token = this.generateToken(user.id);
+      );
 
       return {
         verified: true,
-        user: this.sanitizeUser(user),
-        token,
+        user: this.authService.sanitizeUser(user),
+        ...tokens,
       };
     } catch (error) {
       await this.securityService.logSecurityEvent({
@@ -311,18 +368,5 @@ export class WebAuthnService {
       );
 
     return { message: 'Credential deleted successfully' };
-  }
-
-  private generateToken(userId: string): string {
-    const payload = { sub: userId };
-    return this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_SECRET', { infer: true }),
-      expiresIn: this.configService.get('JWT_EXPIRES_IN', { infer: true }),
-    });
-  }
-
-  private sanitizeUser(user: any) {
-    const { passwordAuth, webauthnCredentials, ...sanitized } = user;
-    return sanitized;
   }
 }

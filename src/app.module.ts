@@ -1,5 +1,4 @@
-// import { AdminModule } from '@/admin/admin.module';
-// import { HealthController } from '@/common/controllers/health.controller';
+import { AuthModule } from '@/auth/auth.module';
 import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
 import { JwtStrategy } from '@/common/strategies/jwt.strategy';
 import { Env, envSchema } from '@/config/configuration';
@@ -7,7 +6,7 @@ import { EmailModule } from '@/email/email.module';
 import { PasswordAuthModule } from '@/password-auth/password-auth.module';
 import { PasswordlessAuthModule } from '@/passwordless-auth/passwordless-auth.module';
 import { SecurityModule } from '@/security/security.module';
-// import { WebAuthnModule } from '@/webauthn-auth/webauthn-auth.module';
+import { WebAuthnModule } from '@/webauthn-auth/webauthn-auth.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -15,6 +14,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import z from 'zod';
+import { HealthController } from './common/controllers/health.controller';
 
 @Module({
   imports: [
@@ -55,14 +55,14 @@ import z from 'zod';
       }),
     }),
     PassportModule,
+    AuthModule,
     PasswordAuthModule,
     PasswordlessAuthModule,
-    // WebAuthnModule,
+    WebAuthnModule,
     SecurityModule,
     EmailModule,
-    // AdminModule,
   ],
-  // controllers: [HealthController],
+  controllers: [HealthController],
   providers: [
     JwtStrategy,
     {

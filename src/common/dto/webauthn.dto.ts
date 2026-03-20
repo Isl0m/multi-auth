@@ -6,6 +6,9 @@ export class RegisterWebAuthnDto {
 }
 
 export class VerifyWebAuthnRegistrationDto {
+  @IsString()
+  token: string;
+
   @IsObject()
   credential: any;
 

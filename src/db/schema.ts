@@ -51,7 +51,9 @@ export const users = pgTable(
     lastLoginAt: timestamp('last_login_at'),
     lastLoginIp: varchar('last_login_ip', { length: 45 }),
     createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
+    updatedAt: timestamp('updated_at')
+      .defaultNow()
+      .$onUpdate(() => new Date()),
   },
   (table) => [index('email_idx').on(table.email)],
 );
@@ -69,7 +71,9 @@ export const passwordAuth = pgTable(
     mfaSecret: varchar('mfa_secret', { length: 255 }),
     passwordChangedAt: timestamp('password_changed_at'),
     createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
+    updatedAt: timestamp('updated_at')
+      .defaultNow()
+      .$onUpdate(() => new Date()),
   },
   (table) => [index('password_auth_user_id_idx').on(table.userId)],
 );
@@ -103,9 +107,10 @@ export const magicLinkTokens = pgTable(
   'magic_link_tokens',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
+    email: varchar('email', { length: 255 }), // Used for Just-in-Time user creation
     token: varchar('token', { length: 255 }).notNull().unique(),
     expiresAt: timestamp('expires_at').notNull(),
     usedAt: timestamp('used_at'),
@@ -116,6 +121,7 @@ export const magicLinkTokens = pgTable(
   (table) => [
     index('token_idx').on(table.token),
     index('magic_link_user_id_idx').on(table.userId),
+    index('magic_link_email_idx').on(table.email),
   ],
 );
 
@@ -183,6 +189,25 @@ export const passwordResetTokens = pgTable(
   ],
 );
 
+// WebAuthn Registration Tokens table
+export const webauthnRegistrationTokens = pgTable(
+  'webauthn_registration_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: varchar('email', { length: 255 }).notNull(),
+    token: varchar('token', { length: 255 }).notNull().unique(),
+    expiresAt: timestamp('expires_at').notNull(),
+    usedAt: timestamp('used_at'),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('webauthn_reg_token_idx').on(table.token),
+    index('webauthn_reg_email_idx').on(table.email),
+  ],
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   passwordAuth: one(passwordAuth),
@@ -244,6 +269,11 @@ export const passwordResetTokensRelations = relations(
   }),
 );
 
+export const webauthnRegistrationTokensRelations = relations(
+  webauthnRegistrationTokens,
+  () => ({}),
+);
+
 // Types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -265,3 +295,8 @@ export type NewSecurityEvent = typeof securityEvents.$inferInsert;
 
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert;
+
+export type WebauthnRegistrationToken =
+  typeof webauthnRegistrationTokens.$inferSelect;
+export type NewWebauthnRegistrationToken =
+  typeof webauthnRegistrationTokens.$inferInsert;

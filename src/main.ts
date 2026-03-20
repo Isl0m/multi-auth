@@ -14,14 +14,14 @@ async function bootstrap() {
   // Security middleware
   app.use(helmet());
 
+  // Cookie parser
+  app.use(cookieParser());
+
   // CORS
   app.enableCors({
     origin: configService.get('CORS_ORIGIN', { infer: true }),
     credentials: true,
   });
-
-  // Cookie parser
-  app.use(cookieParser());
 
   // Global validation pipe
   app.useGlobalPipes(

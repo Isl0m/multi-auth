@@ -1,3 +1,4 @@
+import { AuthService } from '@/auth/auth.service';
 import {
   PasswordlessLoginDto,
   VerifyMagicLinkDto,
@@ -9,7 +10,6 @@ import { EmailService } from '@/email/email.service';
 import { SecurityService } from '@/security/security.service';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 
@@ -17,9 +17,9 @@ import { and, eq, gt, isNull } from 'drizzle-orm';
 export class PasswordlessAuthService {
   constructor(
     private readonly configService: ConfigService<Env, true>,
-    private readonly jwtService: JwtService,
     private readonly securityService: SecurityService,
     private readonly emailService: EmailService,
+    private readonly authService: AuthService,
   ) {}
 
   async sendMagicLink(
@@ -29,38 +29,19 @@ export class PasswordlessAuthService {
   ) {
     const { email } = loginDto;
 
-    // Find or create user
-    let user = await db.query.users.findFirst({
+    // Find user
+    const user = await db.query.users.findFirst({
       where: eq(users.email, email.toLowerCase()),
     });
-
-    if (!user) {
-      // Create new user for passwordless auth
-      [user] = await db
-        .insert(users)
-        .values({
-          email: email.toLowerCase(),
-          emailVerified: true,
-        })
-        .returning();
-
-      await this.securityService.logSecurityEvent({
-        userId: user.id,
-        eventType: 'registration',
-        authMethod: 'passwordless',
-        ipAddress,
-        userAgent,
-        success: true,
-      });
-    }
 
     // Generate magic link token
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
-    // Save token
+    // Save token - either linked to a userId or just storing the email for new users
     await db.insert(magicLinkTokens).values({
-      userId: user.id,
+      userId: user?.id ?? null,
+      email: user ? null : email.toLowerCase(),
       token,
       expiresAt,
       ipAddress,
@@ -69,16 +50,17 @@ export class PasswordlessAuthService {
 
     // Send magic link email
     const magicLink = `${this.configService.get('FRONTEND_URL', { infer: true })}/auth/passwordless/verify?token=${token}`;
-    await this.emailService.sendMagicLink(user.email, magicLink);
+    await this.emailService.sendMagicLink(email.toLowerCase(), magicLink);
 
     // Log event
     await this.securityService.logSecurityEvent({
-      userId: user.id,
+      userId: user?.id ?? null,
       eventType: 'magic_link_sent',
       authMethod: 'passwordless',
       ipAddress,
       userAgent,
       success: true,
+      metadata: user ? {} : { email: email.toLowerCase() },
     });
 
     return {
@@ -118,24 +100,62 @@ export class PasswordlessAuthService {
       throw new UnauthorizedException('Invalid or expired magic link');
     }
 
-    // Mark token as used
-    await db
-      .update(magicLinkTokens)
-      .set({ usedAt: new Date() })
-      .where(eq(magicLinkTokens.id, magicToken.id));
+    // Mark token as used and handle user creation/update in transaction
+    const { user, tokens } = await db.transaction(async (tx) => {
+      let userId = magicToken.userId;
+      let finalUser = magicToken.user;
 
-    // Update user last login
-    await db
-      .update(users)
-      .set({
-        lastLoginAt: new Date(),
-        lastLoginIp: ipAddress,
-      })
-      .where(eq(users.id, magicToken.userId));
+      if (!userId && magicToken.email) {
+        // Just-in-Time user creation for new users
+        [finalUser] = await tx
+          .insert(users)
+          .values({
+            email: magicToken.email,
+            emailVerified: true,
+          })
+          .returning();
+
+        userId = finalUser.id;
+
+        // Log registration
+        await this.securityService.logSecurityEvent({
+          userId,
+          eventType: 'registration',
+          authMethod: 'passwordless',
+          ipAddress,
+          userAgent,
+          success: true,
+        });
+      } else if (userId) {
+        // Update existing user last login and verify email if not already verified
+        [finalUser] = await tx
+          .update(users)
+          .set({
+            emailVerified: true,
+            lastLoginAt: new Date(),
+            lastLoginIp: ipAddress,
+          })
+          .where(eq(users.id, userId))
+          .returning();
+      }
+
+      await tx
+        .update(magicLinkTokens)
+        .set({ usedAt: new Date() })
+        .where(eq(magicLinkTokens.id, magicToken.id));
+
+      const tokens = await this.authService.generateTokens(
+        userId!,
+        ipAddress,
+        userAgent,
+      );
+
+      return { user: finalUser!, tokens };
+    });
 
     // Log successful login
     await this.securityService.logSecurityEvent({
-      userId: magicToken.userId,
+      userId: user.id,
       eventType: 'login_success',
       authMethod: 'passwordless',
       ipAddress,
@@ -143,35 +163,9 @@ export class PasswordlessAuthService {
       success: true,
     });
 
-    // Log magic link used
-    await this.securityService.logSecurityEvent({
-      userId: magicToken.userId,
-      eventType: 'magic_link_used',
-      authMethod: 'passwordless',
-      ipAddress,
-      userAgent,
-      success: true,
-    });
-
-    // Generate JWT token
-    const jwtToken = this.generateToken(magicToken.userId);
-
     return {
-      user: this.sanitizeUser(magicToken.user),
-      token: jwtToken,
+      user: this.authService.sanitizeUser(user),
+      ...tokens,
     };
-  }
-
-  private generateToken(userId: string): string {
-    const payload = { sub: userId };
-    return this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_SECRET', { infer: true }),
-      expiresIn: this.configService.get('JWT_EXPIRES_IN', { infer: true }),
-    });
-  }
-
-  private sanitizeUser(user: any) {
-    const { passwordAuth, ...sanitized } = user;
-    return sanitized;
   }
 }

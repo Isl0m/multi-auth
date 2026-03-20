@@ -40,6 +40,22 @@ export class EmailService {
     });
   }
 
+  async sendWebAuthnRegistrationEmail(email: string, registrationUrl: string) {
+    await this.transporter.sendMail({
+      from: this.configService.get('EMAIL_FROM', { infer: true }),
+      to: email,
+      subject: 'Complete Your WebAuthn Registration - Auth System',
+      html: `
+        <h2>Verify Your Email</h2>
+        <p>Click the link below to verify your email and complete your biometric registration. This link will expire in 15 minutes.</p>
+        <a href="${registrationUrl}" style="display: inline-block; padding: 10px 20px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px;">
+          Verify Email & Register Biometrics
+        </a>
+        <p>If you didn't request this, please ignore this email.</p>
+      `,
+    });
+  }
+
   async sendPasswordResetEmail(email: string, resetUrl: string) {
     await this.transporter.sendMail({
       from: this.configService.get('EMAIL_FROM', { infer: true }),

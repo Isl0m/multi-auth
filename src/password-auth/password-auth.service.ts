@@ -49,26 +49,50 @@ export class PasswordAuthService {
   ) {
     const { email, password, firstName, lastName } = registerDto;
 
-    // Check if user already exists
     const existingUser = await db.query.users.findFirst({
       where: eq(users.email, email.toLowerCase()),
+      with: { passwordAuth: true },
     });
 
-    if (existingUser) {
-      throw new ConflictException('User with this email already exists');
+    if (existingUser?.passwordAuth) {
+      throw new ConflictException('This email already has a password set');
     }
 
-    // Check password against common passwords list (simplified)
     if (this.isCommonPassword(password)) {
       throw new BadRequestException(
         'Password is too common. Please choose a stronger password',
       );
     }
 
-    // Hash password
     const passwordHash = await bcrypt.hash(password, this.bcryptSaltRounds);
 
-    // Create user and password auth record in a transaction
+    if (existingUser) {
+      await db.insert(passwordAuth).values({
+        userId: existingUser.id,
+        passwordHash,
+        passwordChangedAt: new Date(),
+      });
+
+      const tokens = await this.authService.generateTokens(
+        existingUser.id,
+        ipAddress,
+        userAgent,
+      );
+      await this.securityService.logSecurityEvent({
+        userId: existingUser.id,
+        eventType: 'registration',
+        authMethod: 'password',
+        ipAddress,
+        userAgent,
+        success: true,
+      });
+
+      return {
+        user: this.authService.sanitizeUser(existingUser),
+        ...tokens,
+      };
+    }
+
     const { newUser } = await db.transaction(async (tx) => {
       const [user] = await tx
         .insert(users)
@@ -88,12 +112,12 @@ export class PasswordAuthService {
 
       return { newUser: user };
     });
+
     const tokens = await this.authService.generateTokens(
       newUser.id,
       ipAddress,
       userAgent,
     );
-    // Log security event
     await this.securityService.logSecurityEvent({
       userId: newUser.id,
       eventType: 'registration',
@@ -112,7 +136,6 @@ export class PasswordAuthService {
   async login(loginDto: LoginDto, ipAddress: string, userAgent: string) {
     const { email, password, totpCode } = loginDto;
 
-    // Find user
     const user = await db.query.users.findFirst({
       where: eq(users.email, email.toLowerCase()),
       with: {
@@ -133,7 +156,6 @@ export class PasswordAuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Check if account is locked
     if (user.isLocked && user.lockoutUntil && user.lockoutUntil > new Date()) {
       const remainingTime = Math.ceil(
         (user.lockoutUntil.getTime() - Date.now()) / 1000 / 60,
@@ -143,7 +165,6 @@ export class PasswordAuthService {
       );
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(
       password,
       user.passwordAuth.passwordHash,
@@ -154,7 +175,6 @@ export class PasswordAuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Check MFA if enabled
     if (user.passwordAuth.mfaEnabled && user.passwordAuth.mfaSecret) {
       if (!totpCode) {
         return {
@@ -176,7 +196,6 @@ export class PasswordAuthService {
       }
     }
 
-    // Reset failed login attempts
     await db
       .update(users)
       .set({
@@ -188,7 +207,6 @@ export class PasswordAuthService {
       })
       .where(eq(users.id, user.id));
 
-    // Log successful login
     await this.securityService.logSecurityEvent({
       userId: user.id,
       eventType: 'login_success',
@@ -198,7 +216,6 @@ export class PasswordAuthService {
       success: true,
     });
 
-    // Generate tokens
     const tokens = await this.authService.generateTokens(
       user.id,
       ipAddress,
@@ -227,10 +244,8 @@ export class PasswordAuthService {
       throw new BadRequestException('MFA is already enabled');
     }
 
-    // Generate MFA secret
     const secretToVerify = enableMfaDto.secret;
 
-    // Verify the provided code
     const isValid = speakeasy.totp.verify({
       secret: secretToVerify,
       encoding: 'base32',
@@ -242,7 +257,6 @@ export class PasswordAuthService {
       throw new BadRequestException('Invalid MFA code');
     }
 
-    // Enable MFA
     await db
       .update(passwordAuth)
       .set({
@@ -251,7 +265,6 @@ export class PasswordAuthService {
       })
       .where(eq(passwordAuth.userId, userId));
 
-    // Log security event
     await this.securityService.logSecurityEvent({
       userId,
       eventType: 'mfa_enabled',
@@ -283,7 +296,6 @@ export class PasswordAuthService {
       throw new BadRequestException('MFA is not enabled');
     }
 
-    // Verify the provided code
     const isValid = speakeasy.totp.verify({
       secret: user.passwordAuth.mfaSecret,
       encoding: 'base32',
@@ -295,7 +307,6 @@ export class PasswordAuthService {
       throw new BadRequestException('Invalid MFA code');
     }
 
-    // Disable MFA
     await db
       .update(passwordAuth)
       .set({
@@ -304,7 +315,6 @@ export class PasswordAuthService {
       })
       .where(eq(passwordAuth.userId, userId));
 
-    // Log security event
     await this.securityService.logSecurityEvent({
       userId,
       eventType: 'mfa_disabled',
@@ -328,18 +338,15 @@ export class PasswordAuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Generate MFA secret
     const secret = speakeasy.generateSecret({
       name: `Auth System (${user.email})`,
       length: 32,
     });
 
-    // Guard clause to handle the undefined case
     if (!secret.otpauth_url) {
       throw new InternalServerErrorException('Failed to generate MFA Auth URL');
     }
 
-    // Generate QR code
     const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
 
     return {
@@ -367,7 +374,6 @@ export class PasswordAuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Verify current password
     const isPasswordValid = await bcrypt.compare(
       currentPassword,
       user.passwordAuth.passwordHash,
@@ -377,7 +383,6 @@ export class PasswordAuthService {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
-    // Check if new password is the same as current
     const isSamePassword = await bcrypt.compare(
       newPassword,
       user.passwordAuth.passwordHash,
@@ -389,13 +394,11 @@ export class PasswordAuthService {
       );
     }
 
-    // Hash new password
     const newPasswordHash = await bcrypt.hash(
       newPassword,
       this.bcryptSaltRounds,
     );
 
-    // Update password
     await db
       .update(passwordAuth)
       .set({
@@ -404,7 +407,6 @@ export class PasswordAuthService {
       })
       .where(eq(passwordAuth.userId, userId));
 
-    // Log security event
     await this.securityService.logSecurityEvent({
       userId,
       eventType: 'password_reset',
@@ -421,8 +423,8 @@ export class PasswordAuthService {
 
   async requestPasswordReset(
     resetDto: ResetPasswordRequestDto,
-    ipAddress: string,
-    userAgent: string,
+    _ipAddress: string,
+    _userAgent: string,
   ) {
     const { email } = resetDto;
 
@@ -433,25 +435,24 @@ export class PasswordAuthService {
       },
     });
 
-    // Always return success to prevent email enumeration
     if (!user || !user.passwordAuth) {
       return {
         message: 'If the email exists, a password reset link has been sent',
       };
     }
 
-    // Generate reset token
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const expiresAt = new Date(
+      Date.now() +
+        this.configService.get('PASSWORD_RESET_EXPIRES_MS', { infer: true }),
+    );
 
-    // Save reset token
     await db.insert(passwordResetTokens).values({
       userId: user.id,
       token,
       expiresAt,
     });
 
-    // Send reset email
     const resetUrl = `${this.configService.get('FRONTEND_URL', { infer: true })}/reset-password?token=${token}`;
     await this.emailService.sendPasswordResetEmail(user.email, resetUrl);
 
@@ -467,7 +468,6 @@ export class PasswordAuthService {
   ) {
     const { token, newPassword } = resetDto;
 
-    // Find reset token
     const resetToken = await db.query.passwordResetTokens.findFirst({
       where: and(
         eq(passwordResetTokens.token, token),
@@ -479,7 +479,6 @@ export class PasswordAuthService {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    // Find user
     const user = await db.query.users.findFirst({
       where: eq(users.id, resetToken.userId),
       with: {
@@ -491,13 +490,11 @@ export class PasswordAuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Hash new password
     const newPasswordHash = await bcrypt.hash(
       newPassword,
       this.bcryptSaltRounds,
     );
 
-    // Update password
     await db
       .update(passwordAuth)
       .set({
@@ -506,7 +503,6 @@ export class PasswordAuthService {
       })
       .where(eq(passwordAuth.userId, user.id));
 
-    // Mark token as used
     await db
       .update(passwordResetTokens)
       .set({
@@ -514,7 +510,6 @@ export class PasswordAuthService {
       })
       .where(eq(passwordResetTokens.id, resetToken.id));
 
-    // Reset account lockout
     await db
       .update(users)
       .set({
@@ -524,7 +519,6 @@ export class PasswordAuthService {
       })
       .where(eq(users.id, user.id));
 
-    // Log security event
     await this.securityService.logSecurityEvent({
       userId: user.id,
       eventType: 'password_reset',
@@ -558,7 +552,11 @@ export class PasswordAuthService {
     if (!user) return;
 
     const newFailedAttempts = (user.failedLoginAttempts || 0) + 1;
-    const updateData: any = {
+    const updateData: {
+      failedLoginAttempts: number;
+      isLocked?: boolean;
+      lockoutUntil?: Date;
+    } = {
       failedLoginAttempts: newFailedAttempts,
     };
 
@@ -591,7 +589,6 @@ export class PasswordAuthService {
   }
 
   private isCommonPassword(password: string): boolean {
-    // Simplified common password check
     const commonPasswords = [
       'password',
       '12345678',

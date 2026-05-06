@@ -11,19 +11,15 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService<Env, true>);
 
-  // Security middleware
   app.use(helmet());
 
-  // Cookie parser
   app.use(cookieParser());
 
-  // CORS
   app.enableCors({
     origin: configService.get('CORS_ORIGIN', { infer: true }),
     credentials: true,
   });
 
-  // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -32,7 +28,6 @@ async function bootstrap() {
     }),
   );
 
-  // API prefix
   const apiPrefix = configService.get('API_PREFIX', { infer: true });
   app.setGlobalPrefix(apiPrefix);
 

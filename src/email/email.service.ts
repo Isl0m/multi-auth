@@ -1,32 +1,23 @@
 import { Env } from '@/config/configuration';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 @Injectable()
 export class EmailService {
-  private transporter: nodemailer.Transporter;
+  private resend: Resend;
+  private from: string;
 
   constructor(private readonly configService: ConfigService<Env, true>) {
-    this.transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        type: 'OAuth2',
-        user: this.configService.get('EMAIL_USER', { infer: true }),
-        clientId: this.configService.get('GMAIL_CLIENT_ID', { infer: true }),
-        clientSecret: this.configService.get('GMAIL_CLIENT_SECRET', {
-          infer: true,
-        }),
-        refreshToken: this.configService.get('GMAIL_REFRESH_TOKEN', {
-          infer: true,
-        }),
-      },
-    });
+    this.resend = new Resend(
+      configService.get('RESEND_API_KEY', { infer: true }),
+    );
+    this.from = configService.get('EMAIL_FROM', { infer: true });
   }
 
   async sendMagicLink(email: string, magicLink: string) {
-    await this.transporter.sendMail({
-      from: this.configService.get('EMAIL_FROM', { infer: true }),
+    await this.resend.emails.send({
+      from: this.from,
       to: email,
       subject: 'Your Magic Link - Auth System',
       html: `
@@ -41,8 +32,8 @@ export class EmailService {
   }
 
   async sendWebAuthnRegistrationEmail(email: string, registrationUrl: string) {
-    await this.transporter.sendMail({
-      from: this.configService.get('EMAIL_FROM', { infer: true }),
+    await this.resend.emails.send({
+      from: this.from,
       to: email,
       subject: 'Complete Your WebAuthn Registration - Auth System',
       html: `
@@ -57,8 +48,8 @@ export class EmailService {
   }
 
   async sendPasswordResetEmail(email: string, resetUrl: string) {
-    await this.transporter.sendMail({
-      from: this.configService.get('EMAIL_FROM', { infer: true }),
+    await this.resend.emails.send({
+      from: this.from,
       to: email,
       subject: 'Password Reset Request - Auth System',
       html: `
@@ -73,8 +64,8 @@ export class EmailService {
   }
 
   async sendWelcomeEmail(email: string, name?: string) {
-    await this.transporter.sendMail({
-      from: this.configService.get('EMAIL_FROM', { infer: true }),
+    await this.resend.emails.send({
+      from: this.from,
       to: email,
       subject: 'Welcome to Auth System',
       html: `

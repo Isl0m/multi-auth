@@ -12,7 +12,6 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-// Enums
 export const authMethodEnum = pgEnum('auth_method', [
   'password',
   'passwordless',
@@ -35,7 +34,6 @@ export const eventTypeEnum = pgEnum('event_type', [
   'magic_link_used',
 ]);
 
-// Users table
 export const users = pgTable(
   'users',
   {
@@ -58,7 +56,6 @@ export const users = pgTable(
   (table) => [index('email_idx').on(table.email)],
 );
 
-// Password Authentication table
 export const passwordAuth = pgTable(
   'password_auth',
   {
@@ -78,7 +75,6 @@ export const passwordAuth = pgTable(
   (table) => [index('password_auth_user_id_idx').on(table.userId)],
 );
 
-// WebAuthn Credentials table
 export const webauthnCredentials = pgTable(
   'webauthn_credentials',
   {
@@ -102,7 +98,6 @@ export const webauthnCredentials = pgTable(
   ],
 );
 
-// Magic Link Tokens table
 export const magicLinkTokens = pgTable(
   'magic_link_tokens',
   {
@@ -110,7 +105,7 @@ export const magicLinkTokens = pgTable(
     userId: uuid('user_id').references(() => users.id, {
       onDelete: 'cascade',
     }),
-    email: varchar('email', { length: 255 }), // Used for Just-in-Time user creation
+    email: varchar('email', { length: 255 }),
     token: varchar('token', { length: 255 }).notNull().unique(),
     expiresAt: timestamp('expires_at').notNull(),
     usedAt: timestamp('used_at'),
@@ -125,7 +120,6 @@ export const magicLinkTokens = pgTable(
   ],
 );
 
-// Refresh Tokens table
 export const refreshTokens = pgTable(
   'refresh_tokens',
   {
@@ -146,7 +140,6 @@ export const refreshTokens = pgTable(
   ],
 );
 
-// Security Events table
 export const securityEvents = pgTable(
   'security_events',
   {
@@ -170,7 +163,6 @@ export const securityEvents = pgTable(
   ],
 );
 
-// Password Reset Tokens table
 export const passwordResetTokens = pgTable(
   'password_reset_tokens',
   {
@@ -189,7 +181,6 @@ export const passwordResetTokens = pgTable(
   ],
 );
 
-// WebAuthn Registration Tokens table
 export const webauthnRegistrationTokens = pgTable(
   'webauthn_registration_tokens',
   {
@@ -208,7 +199,6 @@ export const webauthnRegistrationTokens = pgTable(
   ],
 );
 
-// Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   passwordAuth: one(passwordAuth),
   webauthnCredentials: many(webauthnCredentials),
@@ -274,7 +264,6 @@ export const webauthnRegistrationTokensRelations = relations(
   () => ({}),
 );
 
-// Types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 

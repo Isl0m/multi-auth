@@ -13,7 +13,7 @@ import {
   ResetPasswordRequestDto,
   VerifyMfaDto,
 } from '@/common/dto/auth.dto';
-import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
+import { setAuthCookies } from '@/common/helpers/auth-cookies.helper';
 import {
   Body,
   Controller,
@@ -22,13 +22,13 @@ import {
   HttpStatus,
   Patch,
   Post,
-  UseGuards,
+  Res,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { PasswordAuthService } from './password-auth.service';
 
 @Controller('auth/password')
-@UseGuards(JwtAuthGuard)
 export class PasswordAuthController {
   constructor(private readonly passwordAuthService: PasswordAuthService) {}
 
@@ -39,8 +39,15 @@ export class PasswordAuthController {
     @Body() registerDto: RegisterDto,
     @IpAddress() ipAddress: string,
     @UserAgent() userAgent: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.passwordAuthService.register(registerDto, ipAddress, userAgent);
+    const result = await this.passwordAuthService.register(
+      registerDto,
+      ipAddress,
+      userAgent,
+    );
+    setAuthCookies(res, result);
+    return result;
   }
 
   @Public()
@@ -51,13 +58,24 @@ export class PasswordAuthController {
     @Body() loginDto: LoginDto,
     @IpAddress() ipAddress: string,
     @UserAgent() userAgent: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.passwordAuthService.login(loginDto, ipAddress, userAgent);
+    const result = await this.passwordAuthService.login(
+      loginDto,
+      ipAddress,
+      userAgent,
+    );
+    if ('accessToken' in result) {
+      setAuthCookies(
+        res,
+        result as { accessToken: string; refreshToken: string },
+      );
+    }
+    return result;
   }
 
   @Get('mfa/qrcode')
   async generateMfaQrCode(@CurrentUser() user: any) {
-    console.log(user);
     return this.passwordAuthService.generateMfaQrCode(user.userId);
   }
 

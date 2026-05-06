@@ -29,16 +29,16 @@ export class PasswordlessAuthService {
   ) {
     const { email } = loginDto;
 
-    // Find user
     const user = await db.query.users.findFirst({
       where: eq(users.email, email.toLowerCase()),
     });
 
-    // Generate magic link token
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const expiresAt = new Date(
+      Date.now() +
+        this.configService.get('MAGIC_LINK_EXPIRES_MS', { infer: true }),
+    );
 
-    // Save token - either linked to a userId or just storing the email for new users
     await db.insert(magicLinkTokens).values({
       userId: user?.id ?? null,
       email: user ? null : email.toLowerCase(),
@@ -48,11 +48,9 @@ export class PasswordlessAuthService {
       userAgent,
     });
 
-    // Send magic link email
     const magicLink = `${this.configService.get('FRONTEND_URL', { infer: true })}/auth/passwordless/verify?token=${token}`;
     await this.emailService.sendMagicLink(email.toLowerCase(), magicLink);
 
-    // Log event
     await this.securityService.logSecurityEvent({
       userId: user?.id ?? null,
       eventType: 'magic_link_sent',
@@ -75,7 +73,6 @@ export class PasswordlessAuthService {
   ) {
     const { token } = verifyDto;
 
-    // Find valid token
     const magicToken = await db.query.magicLinkTokens.findFirst({
       where: and(
         eq(magicLinkTokens.token, token),
@@ -100,13 +97,12 @@ export class PasswordlessAuthService {
       throw new UnauthorizedException('Invalid or expired magic link');
     }
 
-    // Mark token as used and handle user creation/update in transaction
-    const { user, tokens } = await db.transaction(async (tx) => {
+    const { finalUser, isNewUser } = await db.transaction(async (tx) => {
       let userId = magicToken.userId;
       let finalUser = magicToken.user;
+      let isNewUser = false;
 
       if (!userId && magicToken.email) {
-        // Just-in-Time user creation for new users
         [finalUser] = await tx
           .insert(users)
           .values({
@@ -116,18 +112,8 @@ export class PasswordlessAuthService {
           .returning();
 
         userId = finalUser.id;
-
-        // Log registration
-        await this.securityService.logSecurityEvent({
-          userId,
-          eventType: 'registration',
-          authMethod: 'passwordless',
-          ipAddress,
-          userAgent,
-          success: true,
-        });
+        isNewUser = true;
       } else if (userId) {
-        // Update existing user last login and verify email if not already verified
         [finalUser] = await tx
           .update(users)
           .set({
@@ -144,18 +130,37 @@ export class PasswordlessAuthService {
         .set({ usedAt: new Date() })
         .where(eq(magicLinkTokens.id, magicToken.id));
 
-      const tokens = await this.authService.generateTokens(
-        userId!,
-        ipAddress,
-        userAgent,
-      );
-
-      return { user: finalUser!, tokens };
+      return { finalUser: finalUser!, isNewUser };
     });
 
-    // Log successful login
+    const tokens = await this.authService.generateTokens(
+      finalUser.id,
+      ipAddress,
+      userAgent,
+    );
+
+    if (isNewUser) {
+      await this.securityService.logSecurityEvent({
+        userId: finalUser.id,
+        eventType: 'registration',
+        authMethod: 'passwordless',
+        ipAddress,
+        userAgent,
+        success: true,
+      });
+    }
+
     await this.securityService.logSecurityEvent({
-      userId: user.id,
+      userId: finalUser.id,
+      eventType: 'magic_link_used',
+      authMethod: 'passwordless',
+      ipAddress,
+      userAgent,
+      success: true,
+    });
+
+    await this.securityService.logSecurityEvent({
+      userId: finalUser.id,
       eventType: 'login_success',
       authMethod: 'passwordless',
       ipAddress,
@@ -164,7 +169,7 @@ export class PasswordlessAuthService {
     });
 
     return {
-      user: this.authService.sanitizeUser(user),
+      user: this.authService.sanitizeUser(finalUser),
       ...tokens,
     };
   }

@@ -6,19 +6,19 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { eq } from 'drizzle-orm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-
-// interface JwtPayload {
-//   sub: string;
-//   email: string;
-// }
+import type { Request } from 'express';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private configService: ConfigService<Env, true>) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: Request) => request?.cookies?.['access_token'] ?? null,
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.get('JWT_SECRET', { infer: true }),
+      passReqToCallback: false,
     });
   }
 

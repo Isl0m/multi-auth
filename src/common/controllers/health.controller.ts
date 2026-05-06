@@ -11,7 +11,7 @@ export class HealthController {
     let dbStatus = 'up';
     try {
       await db.execute(sql`SELECT 1`);
-    } catch (e) {
+    } catch {
       dbStatus = 'down';
     }
 

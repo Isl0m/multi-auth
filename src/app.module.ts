@@ -1,4 +1,5 @@
 import { AuthModule } from '@/auth/auth.module';
+import { ThrottlerExceptionFilter } from '@/common/filters/throttler-exception.filter';
 import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
 import { JwtStrategy } from '@/common/strategies/jwt.strategy';
 import { Env, envSchema } from '@/config/configuration';
@@ -9,7 +10,7 @@ import { SecurityModule } from '@/security/security.module';
 import { WebAuthnModule } from '@/webauthn-auth/webauthn-auth.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -72,6 +73,10 @@ import { HealthController } from './common/controllers/health.controller';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: ThrottlerExceptionFilter,
     },
   ],
 })

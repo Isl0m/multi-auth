@@ -7,20 +7,20 @@ import {
   PasswordlessLoginDto,
   VerifyMagicLinkDto,
 } from '@/common/dto/auth.dto';
-import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
+import { setAuthCookies } from '@/common/helpers/auth-cookies.helper';
 import {
   Body,
   Controller,
   HttpCode,
   HttpStatus,
   Post,
-  UseGuards,
+  Res,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { PasswordlessAuthService } from './passwordless-auth.service';
 
 @Controller('auth/passwordless')
-@UseGuards(JwtAuthGuard)
 export class PasswordlessAuthController {
   constructor(
     private readonly passwordlessAuthService: PasswordlessAuthService,
@@ -49,11 +49,14 @@ export class PasswordlessAuthController {
     @Body() verifyDto: VerifyMagicLinkDto,
     @IpAddress() ipAddress: string,
     @UserAgent() userAgent: string,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.passwordlessAuthService.verifyMagicLink(
+    const result = await this.passwordlessAuthService.verifyMagicLink(
       verifyDto,
       ipAddress,
       userAgent,
     );
+    setAuthCookies(res, result);
+    return result;
   }
 }

@@ -16,6 +16,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type {
   AuthenticationResponseJSON,
+  AuthenticatorTransportFuture,
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import {
@@ -52,22 +53,14 @@ export class WebAuthnAuthService {
   ) {
     const normalizedEmail = email.toLowerCase();
 
-    // Check if user already exists
-    const existingUser = await db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
-    });
-
-    if (existingUser) {
-      throw new BadRequestException(
-        'User already exists. Please login instead.',
-      );
-    }
-
-    // Generate registration token
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const expiresAt = new Date(
+      Date.now() +
+        this.configService.get('WEBAUTHN_REGISTRATION_EXPIRES_MS', {
+          infer: true,
+        }),
+    );
 
-    // Save token
     await db.insert(webauthnRegistrationTokens).values({
       email: normalizedEmail,
       token,
@@ -76,7 +69,6 @@ export class WebAuthnAuthService {
       userAgent,
     });
 
-    // Send registration email
     const registrationUrl = `${this.configService.get('FRONTEND_URL', { infer: true })}/auth/webauthn/register?token=${token}`;
     await this.emailService.sendWebAuthnRegistrationEmail(
       normalizedEmail,
@@ -89,7 +81,6 @@ export class WebAuthnAuthService {
   }
 
   async generateRegistrationOptions(token: string) {
-    // Find valid token
     const regToken = await db.query.webauthnRegistrationTokens.findFirst({
       where: and(
         eq(webauthnRegistrationTokens.token, token),
@@ -128,7 +119,6 @@ export class WebAuthnAuthService {
     ipAddress?: string,
     userAgent?: string,
   ) {
-    // Find valid token
     const regToken = await db.query.webauthnRegistrationTokens.findFirst({
       where: and(
         eq(webauthnRegistrationTokens.token, token),
@@ -153,18 +143,24 @@ export class WebAuthnAuthService {
         throw new BadRequestException('Verification failed');
       }
       const result = await db.transaction(async (tx) => {
-        // 1. Create the user
-        const [newUser] = await tx
-          .insert(users)
-          .values({
-            email: regToken.email,
-            emailVerified: true,
-          })
-          .returning();
+        let userRecord = await tx.query.users.findFirst({
+          where: eq(users.email, regToken.email),
+        });
 
-        // 2. Save credential
+        if (!userRecord) {
+          [userRecord] = await tx
+            .insert(users)
+            .values({ email: regToken.email, emailVerified: true })
+            .returning();
+        } else if (!userRecord.emailVerified) {
+          await tx
+            .update(users)
+            .set({ emailVerified: true })
+            .where(eq(users.id, userRecord.id));
+        }
+
         await tx.insert(webauthnCredentials).values({
-          userId: newUser.id,
+          userId: userRecord.id,
           credentialId: verification.registrationInfo!.credential.id,
           credentialPublicKey: Buffer.from(
             verification.registrationInfo!.credential.publicKey,
@@ -174,16 +170,14 @@ export class WebAuthnAuthService {
           lastUsedAt: new Date(),
         });
 
-        // 3. Mark token as used
         await tx
           .update(webauthnRegistrationTokens)
           .set({ usedAt: new Date() })
           .where(eq(webauthnRegistrationTokens.id, regToken.id));
 
-        return newUser;
+        return userRecord;
       });
 
-      // 4. Log event
       await this.securityService.logSecurityEvent({
         userId: result.id,
         eventType: 'webauthn_registered',
@@ -225,7 +219,8 @@ export class WebAuthnAuthService {
     const allowCredentials = user.webauthnCredentials.map((cred) => ({
       id: cred.credentialId,
       type: 'public-key' as const,
-      transports: (cred.transports as AuthenticatorTransport[]) || undefined,
+      transports:
+        (cred.transports as AuthenticatorTransportFuture[]) || undefined,
     }));
 
     const options = await generateAuthenticationOptions({
@@ -291,7 +286,6 @@ export class WebAuthnAuthService {
         throw new UnauthorizedException('Verification failed');
       }
 
-      // Update credential counter and last used
       await db
         .update(webauthnCredentials)
         .set({
@@ -300,7 +294,6 @@ export class WebAuthnAuthService {
         })
         .where(eq(webauthnCredentials.id, dbCredential.id));
 
-      // Update user last login
       await db
         .update(users)
         .set({
@@ -309,7 +302,6 @@ export class WebAuthnAuthService {
         })
         .where(eq(users.id, user.id));
 
-      // Log successful authentication
       await this.securityService.logSecurityEvent({
         userId: user.id,
         eventType: 'login_success',
